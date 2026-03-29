@@ -1,0 +1,16 @@
+FROM python:3.11
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /bin/
+
+WORKDIR /app/backend
+
+COPY backend ./
+RUN uv sync
+
+ENV FLASK_HOST=0.0.0.0
+ENV DEBUG=false
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 10000
+
+CMD ["sh", "-lc", "export FLASK_PORT=${PORT:-10000} && uv run python run.py"]

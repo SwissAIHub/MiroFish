@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: mirofish-staging
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.render-backend
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: FLASK_HOST
+        value: 0.0.0.0
+      - key: DEBUG
+        value: "false"
+      - key: LLM_BASE_URL
+        value: https://api.openai.com/v1
+      - key: LLM_MODEL_NAME
+        value: gpt-4.1-mini
+      - key: LLM_API_KEY
+        sync: false
+      - key: ZEP_API_KEY
+        sync: false
+
+  - type: web
+    name: mirofish-production
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.render-backend
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: FLASK_HOST
+        value: 0.0.0.0
+      - key: DEBUG
+        value: "false"
+      - key: LLM_BASE_URL
+        value: https://api.openai.com/v1
+      - key: LLM_MODEL_NAME
+        value: gpt-4.1-mini
+      - key: LLM_API_KEY
+        sync: false
+      - key: ZEP_API_KEY
+        sync: false
