@@ -26,7 +26,6 @@ services:
   - type: web
     name: mirofish-production
     runtime: docker
-    plan: standard
     region: frankfurt
     dockerfilePath: ./Dockerfile.render-backend
     healthCheckPath: /health
