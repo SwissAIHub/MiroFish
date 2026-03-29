@@ -1724,9 +1724,35 @@ def get_run_status(simulation_id: str):
         }
     """
     try:
+        manager = SimulationManager()
         run_state = SimulationRunner.get_run_state(simulation_id)
-        
+
         if not run_state:
+            sim_state = manager.get_simulation(simulation_id)
+            artifact_status = SimulationRunner.get_artifact_status(simulation_id)
+            if sim_state or artifact_status.get("simulation_dir_exists"):
+                if not artifact_status.get("config_file_exists"):
+                    reason = "config_missing"
+                elif not artifact_status.get("run_state_file_exists"):
+                    reason = "run_state_missing"
+                else:
+                    reason = "simulation_artifacts_missing"
+                manager.update_simulation_status(simulation_id, SimulationStatus.FAILED, reason)
+                return jsonify({
+                    "success": True,
+                    "data": {
+                        "simulation_id": simulation_id,
+                        "runner_status": "lost",
+                        "current_round": 0,
+                        "total_rounds": 0,
+                        "progress_percent": 0,
+                        "twitter_actions_count": 0,
+                        "reddit_actions_count": 0,
+                        "total_actions_count": 0,
+                        "error": reason,
+                        **artifact_status,
+                    }
+                })
             return jsonify({
                 "success": True,
                 "data": {
@@ -1740,10 +1766,13 @@ def get_run_status(simulation_id: str):
                     "total_actions_count": 0,
                 }
             })
-        
+
         return jsonify({
             "success": True,
-            "data": run_state.to_dict()
+            "data": {
+                **run_state.to_dict(),
+                **SimulationRunner.get_artifact_status(simulation_id),
+            }
         })
         
     except Exception as e:
@@ -1793,10 +1822,33 @@ def get_run_status_detail(simulation_id: str):
         }
     """
     try:
+        manager = SimulationManager()
         run_state = SimulationRunner.get_run_state(simulation_id)
         platform_filter = request.args.get('platform')
-        
+
         if not run_state:
+            sim_state = manager.get_simulation(simulation_id)
+            artifact_status = SimulationRunner.get_artifact_status(simulation_id)
+            if sim_state or artifact_status.get("simulation_dir_exists"):
+                if not artifact_status.get("config_file_exists"):
+                    reason = "config_missing"
+                elif not artifact_status.get("run_state_file_exists"):
+                    reason = "run_state_missing"
+                else:
+                    reason = "simulation_artifacts_missing"
+                manager.update_simulation_status(simulation_id, SimulationStatus.FAILED, reason)
+                return jsonify({
+                    "success": True,
+                    "data": {
+                        "simulation_id": simulation_id,
+                        "runner_status": "lost",
+                        "error": reason,
+                        "all_actions": [],
+                        "twitter_actions": [],
+                        "reddit_actions": [],
+                        **artifact_status,
+                    }
+                })
             return jsonify({
                 "success": True,
                 "data": {
@@ -1841,7 +1893,8 @@ def get_run_status_detail(simulation_id: str):
         result["rounds_count"] = len(run_state.rounds)
         # recent_actions 只展示当前最新一轮两个平台的内容
         result["recent_actions"] = [a.to_dict() for a in recent_actions]
-        
+        result.update(SimulationRunner.get_artifact_status(simulation_id))
+
         return jsonify({
             "success": True,
             "data": result

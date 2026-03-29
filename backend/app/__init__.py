@@ -45,6 +45,7 @@ def create_app(config_class=Config):
     # 注册模拟进程清理函数（确保服务器关闭时终止所有模拟进程）
     from .services.simulation_runner import SimulationRunner
     SimulationRunner.register_cleanup()
+    SimulationRunner.reconcile_all_run_states()
     if should_log_startup:
         logger.info("已注册模拟进程清理函数")
     
@@ -71,10 +72,24 @@ def create_app(config_class=Config):
     # 健康检查
     @app.route('/health')
     def health():
-        return {'status': 'ok', 'service': 'MiroFish Backend'}
+        upload_path = os.path.abspath(app.config.get('UPLOAD_FOLDER', ''))
+        simulation_path = os.path.abspath(app.config.get('OASIS_SIMULATION_DATA_DIR', ''))
+        storage_ok = os.path.isdir(upload_path) and os.access(upload_path, os.W_OK)
+        config_errors = Config.validate()
+        return {
+            'status': 'ok' if storage_ok and not config_errors else 'degraded',
+            'service': 'MiroFish Backend',
+            'details': {
+                'storage_status': 'ok' if storage_ok else 'error',
+                'upload_path': upload_path,
+                'disk_writable': storage_ok,
+                'simulation_dir_exists': os.path.isdir(simulation_path),
+                'llm_configured': bool(Config.LLM_API_KEY),
+                'zep_configured': bool(Config.ZEP_API_KEY),
+            },
+        }
     
     if should_log_startup:
         logger.info("MiroFish Backend 启动完成")
     
     return app
-

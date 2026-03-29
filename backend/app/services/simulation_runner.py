@@ -135,6 +135,7 @@ class SimulationRunState:
     # 时间戳
     started_at: Optional[str] = None
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_heartbeat_at: Optional[str] = None
     completed_at: Optional[str] = None
     
     # 错误信息
@@ -179,6 +180,7 @@ class SimulationRunState:
             "total_actions_count": self.twitter_actions_count + self.reddit_actions_count,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
+            "last_heartbeat_at": self.last_heartbeat_at,
             "completed_at": self.completed_at,
             "error": self.error,
             "process_pid": self.process_pid,
@@ -230,13 +232,12 @@ class SimulationRunner:
     def get_run_state(cls, simulation_id: str) -> Optional[SimulationRunState]:
         """获取运行状态"""
         if simulation_id in cls._run_states:
-            return cls._run_states[simulation_id]
-        
-        # 尝试从文件加载
+            return cls.reconcile_run_state(simulation_id)
+
         state = cls._load_run_state(simulation_id)
         if state:
             cls._run_states[simulation_id] = state
-        return state
+        return cls.reconcile_run_state(simulation_id)
     
     @classmethod
     def _load_run_state(cls, simulation_id: str) -> Optional[SimulationRunState]:
@@ -269,6 +270,7 @@ class SimulationRunner:
                 reddit_actions_count=data.get("reddit_actions_count", 0),
                 started_at=data.get("started_at"),
                 updated_at=data.get("updated_at", datetime.now().isoformat()),
+                last_heartbeat_at=data.get("last_heartbeat_at"),
                 completed_at=data.get("completed_at"),
                 error=data.get("error"),
                 process_pid=data.get("process_pid"),
@@ -307,6 +309,94 @@ class SimulationRunner:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
         cls._run_states[state.simulation_id] = state
+
+    @classmethod
+    def _process_is_alive(cls, pid: Optional[int]) -> bool:
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def get_artifact_status(cls, simulation_id: str) -> Dict[str, Any]:
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        state_file = os.path.join(sim_dir, "state.json")
+        run_state_file = os.path.join(sim_dir, "run_state.json")
+        config_file = os.path.join(sim_dir, "simulation_config.json")
+        twitter_actions = os.path.join(sim_dir, "twitter", "actions.jsonl")
+        reddit_actions = os.path.join(sim_dir, "reddit", "actions.jsonl")
+        simulation_log = os.path.join(sim_dir, "simulation.log")
+
+        return {
+            "simulation_dir_exists": os.path.isdir(sim_dir),
+            "state_file_exists": os.path.exists(state_file),
+            "run_state_file_exists": os.path.exists(run_state_file),
+            "config_file_exists": os.path.exists(config_file),
+            "twitter_actions_exists": os.path.exists(twitter_actions),
+            "reddit_actions_exists": os.path.exists(reddit_actions),
+            "simulation_log_exists": os.path.exists(simulation_log),
+            "artifacts_present": (
+                os.path.exists(run_state_file)
+                or os.path.exists(config_file)
+                or os.path.exists(twitter_actions)
+                or os.path.exists(reddit_actions)
+                or os.path.exists(simulation_log)
+            ),
+        }
+
+    @classmethod
+    def reconcile_run_state(cls, simulation_id: str) -> Optional[SimulationRunState]:
+        state = cls._load_run_state(simulation_id)
+        if not state:
+            return None
+
+        live_process = cls._processes.get(simulation_id)
+        process_alive = bool(
+            (live_process is not None and live_process.poll() is None)
+            or cls._process_is_alive(state.process_pid)
+        )
+        artifact_status = cls.get_artifact_status(simulation_id)
+
+        if (
+            state.runner_status in {RunnerStatus.STARTING, RunnerStatus.RUNNING, RunnerStatus.PAUSED}
+            and not process_alive
+        ):
+            if not artifact_status["config_file_exists"]:
+                reason = "config_missing"
+            elif not artifact_status["artifacts_present"]:
+                reason = "simulation_artifacts_missing"
+            else:
+                reason = "process_missing_after_restart"
+            state.runner_status = RunnerStatus.FAILED
+            state.error = reason
+            state.last_heartbeat_at = datetime.now().isoformat()
+            state.completed_at = datetime.now().isoformat()
+            state.twitter_running = False
+            state.reddit_running = False
+            cls._save_run_state(state)
+
+            from .simulation_manager import SimulationManager, SimulationStatus
+
+            SimulationManager().update_simulation_status(
+                simulation_id,
+                SimulationStatus.FAILED,
+                reason,
+            )
+
+        return state
+
+    @classmethod
+    def reconcile_all_run_states(cls) -> None:
+        if not os.path.exists(cls.RUN_STATE_DIR):
+            return
+        for simulation_id in os.listdir(cls.RUN_STATE_DIR):
+            sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+            if simulation_id.startswith('.') or not os.path.isdir(sim_dir):
+                continue
+            cls.reconcile_run_state(simulation_id)
     
     @classmethod
     def start_simulation(
@@ -364,6 +454,7 @@ class SimulationRunner:
             total_rounds=total_rounds,
             total_simulation_hours=total_hours,
             started_at=datetime.now().isoformat(),
+            last_heartbeat_at=datetime.now().isoformat(),
         )
         
         cls._save_run_state(state)
@@ -507,6 +598,7 @@ class SimulationRunner:
                     )
                 
                 # 更新状态
+                state.last_heartbeat_at = datetime.now().isoformat()
                 cls._save_run_state(state)
                 time.sleep(2)
             
@@ -522,6 +614,7 @@ class SimulationRunner:
             if exit_code == 0:
                 state.runner_status = RunnerStatus.COMPLETED
                 state.completed_at = datetime.now().isoformat()
+                state.last_heartbeat_at = datetime.now().isoformat()
                 logger.info(f"模拟完成: {simulation_id}")
             else:
                 state.runner_status = RunnerStatus.FAILED
@@ -535,6 +628,7 @@ class SimulationRunner:
                 except Exception:
                     pass
                 state.error = f"进程退出码: {exit_code}, 错误: {error_info}"
+                state.last_heartbeat_at = datetime.now().isoformat()
                 logger.error(f"模拟失败: {simulation_id}, error={state.error}")
             
             state.twitter_running = False
@@ -545,6 +639,7 @@ class SimulationRunner:
             logger.error(f"监控线程异常: {simulation_id}, error={str(e)}")
             state.runner_status = RunnerStatus.FAILED
             state.error = str(e)
+            state.last_heartbeat_at = datetime.now().isoformat()
             cls._save_run_state(state)
         
         finally:
@@ -1760,4 +1855,3 @@ class SimulationRunner:
             results = results[:limit]
         
         return results
-

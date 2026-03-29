@@ -458,7 +458,22 @@ class SimulationManager:
     def get_simulation(self, simulation_id: str) -> Optional[SimulationState]:
         """获取模拟状态"""
         return self._load_simulation_state(simulation_id)
-    
+
+    def update_simulation_status(
+        self,
+        simulation_id: str,
+        status: SimulationStatus,
+        error: Optional[str] = None,
+    ) -> Optional[SimulationState]:
+        """更新模拟状态并持久化到磁盘。"""
+        state = self._load_simulation_state(simulation_id)
+        if not state:
+            return None
+        state.status = status
+        state.error = error
+        self._save_simulation_state(state)
+        return state
+
     def list_simulations(self, project_id: Optional[str] = None) -> List[SimulationState]:
         """列出所有模拟"""
         simulations = []
